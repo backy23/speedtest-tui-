@@ -17,6 +17,37 @@ from ui.dashboard import (
 from ui.output import create_result_json, save_json
 
 
+# Constants for parameter validation
+MIN_PING_COUNT = 1
+MAX_PING_COUNT = 100
+MIN_DURATION = 1.0
+MAX_DURATION = 300.0
+DEFAULT_DURATION = 10.0
+MIN_CONNECTIONS = 1
+MAX_CONNECTIONS = 32
+DEFAULT_CONNECTIONS = 4
+
+
+def validate_parameters(
+    ping_count: int,
+    download_duration: float,
+    upload_duration: float,
+    connections: int
+) -> None:
+    """Validate speedtest parameters and raise ValueError if invalid."""
+    if not MIN_PING_COUNT <= ping_count <= MAX_PING_COUNT:
+        raise ValueError(f"Ping count must be between {MIN_PING_COUNT} and {MAX_PING_COUNT}")
+    
+    if not MIN_DURATION <= download_duration <= MAX_DURATION:
+        raise ValueError(f"Download duration must be between {MIN_DURATION} and {MAX_DURATION} seconds")
+    
+    if not MIN_DURATION <= upload_duration <= MAX_DURATION:
+        raise ValueError(f"Upload duration must be between {MIN_DURATION} and {MAX_DURATION} seconds")
+    
+    if not MIN_CONNECTIONS <= connections <= MAX_CONNECTIONS:
+        raise ValueError(f"Connections must be between {MIN_CONNECTIONS} and {MAX_CONNECTIONS}")
+
+
 async def run_speedtest(
     json_output: bool = False,
     output_file: Optional[str] = None,
@@ -228,6 +259,18 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Validate parameters
+    try:
+        validate_parameters(
+            ping_count=args.ping_count,
+            download_duration=args.download_duration,
+            upload_duration=args.upload_duration,
+            connections=args.connections
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
     
     # List servers mode
     if args.list_servers:

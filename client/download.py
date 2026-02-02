@@ -11,6 +11,14 @@ from .api import Server
 from .stats import SpeedStats, ConnectionStats, LatencyStats
 
 
+# Constants for download testing
+DOWNLOAD_CHUNK_SIZE = 256 * 1024  # 256KB chunks for better TCP window utilization
+DOWNLOAD_FILE_SIZE = 50 * 1000 * 1000  # 50MB file size
+SAMPLE_INTERVAL = 0.1  # 100ms sampling interval for accurate jitter calculation
+MAX_CONNECTIONS = 32  # Maximum allowed concurrent connections
+MIN_CONNECTIONS = 1   # Minimum allowed concurrent connections
+
+
 @dataclass
 class DownloadResult:
     """Download test result."""
@@ -47,7 +55,7 @@ class DownloadTester:
     Parallel download speed tester.
     Legacy implementation maintained for compatibility.
     """
-    def __init__(self, duration_seconds: float = 15.0, connections_per_server: int = 4, chunk_size: int = 1024 * 1024):
+    def __init__(self, duration_seconds: float = 15.0, connections_per_server: int = 4, chunk_size: int = DOWNLOAD_CHUNK_SIZE):
         self.duration_seconds = duration_seconds
         self.connections_per_server = connections_per_server
         self.chunk_size = chunk_size
@@ -83,6 +91,9 @@ class SimpleDownloadTester:
     
     async def test(self, server: Server, connections: int = 4) -> DownloadResult:
         """Perform download test on a single server."""
+        # Validate connection count
+        connections = max(MIN_CONNECTIONS, min(connections, MAX_CONNECTIONS))
+        
         result = DownloadResult()
         
         bytes_downloaded = 0
@@ -105,7 +116,14 @@ class SimpleDownloadTester:
             timeout = aiohttp.ClientTimeout(total=None, connect=5, sock_read=5)
             
             try:
-                connector = aiohttp.TCPConnector(ssl=True, force_close=True)
+                # Use connection pooling with force_close=False for better performance
+                connector = aiohttp.TCPConnector(
+                    ssl=True,
+                    force_close=False,
+                    limit=1,
+                    limit_per_host=1,
+                    enable_cleanup_closed=True
+                )
                 async with aiohttp.ClientSession(
                     headers=self.HEADERS,
                     connector=connector,
@@ -113,7 +131,7 @@ class SimpleDownloadTester:
                 ) as session:
                     while not stop_flag.is_set() and time.perf_counter() < end_time:
                         try:
-                            url = f"{server.download_url}?size=50000000" # 50MB
+                            url = f"{server.download_url}?size={DOWNLOAD_FILE_SIZE}"  # Use constant
                             async with session.get(url) as response:
                                 while not stop_flag.is_set():
                                     try:
@@ -121,8 +139,8 @@ class SimpleDownloadTester:
                                             break
                                             
                                         # Use wait_for to allow cancellation during potentially slow reads
-                                        # Read small chunks (16KB) to be responsive
-                                        chunk = await asyncio.wait_for(response.content.read(16384), timeout=0.5)
+                                        # Read larger chunks (256KB) for better TCP window utilization
+                                        chunk = await asyncio.wait_for(response.content.read(DOWNLOAD_CHUNK_SIZE), timeout=0.5)
                                         if not chunk:
                                             break
                                         
@@ -133,17 +151,23 @@ class SimpleDownloadTester:
                                     except asyncio.TimeoutError:
                                         # Just a check for end_time/stop_flag
                                         continue
-                                    except Exception:
+                                    except aiohttp.ClientPayloadError as e:
+                                        # Payload error, break out of inner loop
+                                        break
+                                    except (aiohttp.ClientError, OSError) as e:
+                                        # Connection error, break out of inner loop
                                         break
                         except asyncio.CancelledError:
                             break
-                        except Exception:
+                        except (aiohttp.ClientError, OSError) as e:
+                            # Connection error, retry if time permits
                             if stop_flag.is_set():
                                 break
                             await asyncio.sleep(0.1)
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except (aiohttp.ClientError, OSError) as e:
+                # Connection-level error, stats will be incomplete
                 pass
             
             stats.duration_ms = (time.perf_counter() - conn_start) * 1000
@@ -157,10 +181,10 @@ class SimpleDownloadTester:
             
             while not stop_flag.is_set() and time.perf_counter() < end_time:
                 try:
-                    await asyncio.wait_for(stop_flag.wait(), timeout=0.5)
+                    await asyncio.wait_for(stop_flag.wait(), timeout=SAMPLE_INTERVAL)
                     # If we woke up because stop_flag is set, loop checks and exits
                 except asyncio.TimeoutError:
-                    # Timeout means 0.5s passed, time to sample
+                    # Timeout means SAMPLE_INTERVAL passed, time to sample
                     pass
                 
                 current_time = time.perf_counter()

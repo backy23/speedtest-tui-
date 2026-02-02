@@ -11,6 +11,14 @@ from .api import Server
 from .stats import LatencyStats, calculate_jitter
 
 
+# Constants for latency testing
+DEFAULT_PING_COUNT = 10
+DEFAULT_TIMEOUT = 5.0
+HANDSHAKE_TIMEOUT = 2.0
+MESSAGE_TIMEOUT = 0.5
+MAX_CONCURRENT_TESTS = 10
+
+
 @dataclass
 class PingResult:
     """Result from a single ping."""
@@ -76,7 +84,7 @@ class LatencyTester:
         "Accept-Encoding": "gzip, deflate, br",
     }
     
-    def __init__(self, ping_count: int = 10, timeout: float = 5.0):
+    def __init__(self, ping_count: int = DEFAULT_PING_COUNT, timeout: float = DEFAULT_TIMEOUT):
         self.ping_count = ping_count
         self.timeout = timeout
     
@@ -90,7 +98,7 @@ class LatencyTester:
                 additional_headers=self.WEBSOCKET_HEADERS,
                 ping_interval=None,
                 close_timeout=2,
-                open_timeout=5
+                open_timeout=self.timeout
             ) as ws:
                 # Read initial handshake (with short timeout)
                 await self._read_handshake(ws, result)
@@ -110,7 +118,7 @@ class LatencyTester:
         except asyncio.TimeoutError:
             result.success = False
             result.error = "Connection timeout"
-        except Exception as e:
+        except (websockets.exceptions.WebSocketException, ConnectionError, OSError) as e:
             result.success = False
             result.error = str(e)
         
@@ -123,9 +131,9 @@ class LatencyTester:
         start = time.perf_counter()
         required_found = 0
         
-        while time.perf_counter() - start < 2.0: # Max 2 seconds for handshake
+        while time.perf_counter() - start < HANDSHAKE_TIMEOUT:  # Max 2 seconds for handshake
             try:
-                msg = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                msg = await asyncio.wait_for(ws.recv(), timeout=MESSAGE_TIMEOUT)
                 if msg.startswith("HELLO"):
                     parts = msg.split()
                     if len(parts) >= 2:
@@ -143,7 +151,7 @@ class LatencyTester:
                 # If we timed out waiting for handshake messages, just proceed to ping
                 # Some servers might be quiet
                 break
-            except Exception:
+            except (websockets.exceptions.WebSocketException, ConnectionError, OSError):
                 break
     
     async def _perform_ping(self, ws) -> PingResult:
@@ -200,6 +208,8 @@ class LatencyTester:
         Returns:
             List of ServerLatencyResult, sorted by latency
         """
+        # Validate concurrent parameter
+        concurrent = max(1, min(concurrent, MAX_CONCURRENT_TESTS))
         if concurrent == 1:
             # Sequential testing
             results = []

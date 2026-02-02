@@ -12,6 +12,14 @@ from .api import Server
 from .stats import ConnectionStats, LatencyStats
 
 
+# Constants for upload testing
+UPLOAD_CHUNK_SIZE = 256 * 1024  # 256KB chunks for better TCP window utilization
+UPLOAD_BUFFER_SIZE = 1024 * 1024  # 1MB buffer for pre-generated data
+SAMPLE_INTERVAL = 0.1  # 100ms sampling interval for accurate jitter calculation
+MAX_CONNECTIONS = 32  # Maximum allowed concurrent connections
+MIN_CONNECTIONS = 1   # Minimum allowed concurrent connections
+
+
 @dataclass
 class UploadResult:
     """Upload test result."""
@@ -58,16 +66,21 @@ class UploadTester:
     
     def __init__(self, duration_seconds: float = 15.0):
         self.duration_seconds = duration_seconds
-        # Include random data but we'll reuse a small chunk for streaming
-        self._chunk = os.urandom(65536) # 64KB chunk
+        # Pre-generate larger buffer for better performance
+        self._data_buffer = os.urandom(UPLOAD_BUFFER_SIZE)  # 1MB buffer
+        self._chunk_size = UPLOAD_CHUNK_SIZE
         self.on_progress: Optional[Callable[[float, float], None]] = None
     
     async def test(self, server: Server, connections: int = 4) -> UploadResult:
         """Perform upload speed test."""
+        # Validate connection count
+        connections = max(MIN_CONNECTIONS, min(connections, MAX_CONNECTIONS))
+        
         result = UploadResult()
         
         bytes_uploaded = 0
         speed_samples = []
+        connection_stats = []  # Shared list to collect connection stats
         start_time = time.perf_counter()
         end_time = start_time + self.duration_seconds
         stop_flag = asyncio.Event()
@@ -81,26 +94,53 @@ class UploadTester:
                 hostname=server.hostname
             )
             
+            # Add to shared list for final collection
+            connection_stats.append(stats)
+            
             conn_start = time.perf_counter()
             timeout = aiohttp.ClientTimeout(total=None, connect=5, sock_read=5)
             
+            # Track position in buffer for cycling through data
+            buffer_pos = 0
+            buffer_size = len(self._data_buffer)
+            
             # Async generator that yields data until stop_flag is set
             async def data_stream():
-                nonlocal bytes_uploaded
+                nonlocal bytes_uploaded, buffer_pos
                 
                 while not stop_flag.is_set() and time.perf_counter() < end_time:
-                    yield self._chunk
-                    chunk_len = len(self._chunk)
+                    # Get chunk from buffer (cycle through if needed)
+                    chunk_end = buffer_pos + self._chunk_size
+                    if chunk_end > buffer_size:
+                        # Need to wrap around, yield two chunks
+                        first_part = self._data_buffer[buffer_pos:]
+                        second_part = self._data_buffer[:chunk_end - buffer_size]
+                        chunk = first_part + second_part
+                        buffer_pos = chunk_end - buffer_size
+                    else:
+                        chunk = self._data_buffer[buffer_pos:chunk_end]
+                        buffer_pos = chunk_end
+                    
+                    chunk_len = len(chunk)
                     stats.bytes_transferred += chunk_len
                     bytes_uploaded += chunk_len
-                    # Small sleep to allow event loop to handle cancellations check
-                    # But don't sleep too much or speed drops.
-                    # 0 sleep just yields control.
-                    if stats.bytes_transferred % (1024*1024) == 0: # Check every 1MB
+                    
+                    # Small sleep to allow event loop to handle cancellations
+                    # But don't sleep too much or speed drops
+                    if stats.bytes_transferred % (1024*1024) == 0:  # Check every 1MB
                         await asyncio.sleep(0)
+                    
+                    yield chunk
                         
             try:
-                connector = aiohttp.TCPConnector(ssl=True, force_close=True)
+                # Use connection pooling with force_close=False for better performance
+                connector = aiohttp.TCPConnector(
+                    ssl=True,
+                    force_close=False,
+                    limit=1,
+                    limit_per_host=1,
+                    enable_cleanup_closed=True
+                )
                 async with aiohttp.ClientSession(
                     headers=self.HEADERS,
                     connector=connector,
@@ -118,14 +158,16 @@ class UploadTester:
                                 await response.read()
                         except asyncio.CancelledError:
                             break
-                        except Exception:
+                        except (aiohttp.ClientError, OSError) as e:
                             # If connection breaks, retry if time permits
-                            if stop_flag.is_set(): break
+                            if stop_flag.is_set():
+                                break
                             await asyncio.sleep(0.1)
                             
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except (aiohttp.ClientError, OSError) as e:
+                # Connection-level error, stats will be incomplete
                 pass
             
             stats.duration_ms = (time.perf_counter() - conn_start) * 1000
@@ -139,7 +181,7 @@ class UploadTester:
             
             while not stop_flag.is_set() and time.perf_counter() < end_time:
                 try:
-                    await asyncio.wait_for(stop_flag.wait(), timeout=0.5)
+                    await asyncio.wait_for(stop_flag.wait(), timeout=SAMPLE_INTERVAL)
                 except asyncio.TimeoutError:
                     pass
                 
@@ -182,27 +224,11 @@ class UploadTester:
         except:
             pass
         
-        # Collect results
-        connection_stats = []
-        # We need to manually calculate stats since workers might have been cancelled before return
-        # Actually stats object is modified by reference, so we can access it if we kept a reference.
-        # But here we don't have direct ref to stats objects outside scope.
-        # Wait, worker returns stats. But if cancelled, it might not return.
-        # We should modify worker to update a shared list or result object.
-        # But for now, let's just rely on gathered results. If cancelled, we lose per-conn stats?
-        # A better way is to pass result object to worker.
-        # However, for simplicity/compatibility, let's fix the stats collection.
-        # Since 'stats' is local to worker, if it returns, good. If cancelled, we lose it.
-        # FIX: We can ignore per-connection stats for now or accept they might be empty if hard cancelled.
-        # But aggregate bytes_uploaded is correct.
-        
+        # Collect results from shared list
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         result.bytes_total = bytes_uploaded
         result.samples = speed_samples
+        result.connections = connection_stats  # Use shared list populated by workers
         result.calculate()
-        
-        # Try to recover connection stats (this is tricky with cancellation, but main metric is total speed)
-        # To strictly fix per-conn stats we'd need a shared list passed to workers.
-        # But for purpose of fixing "hanging", this is secondary.
         
         return result

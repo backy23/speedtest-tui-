@@ -32,7 +32,7 @@ def create_result_json(
                 "rtt": {
                     "min": min(latency_results.get("pings", [0])),
                     "max": max(latency_results.get("pings", [0])),
-                    "mean": sum(latency_results.get("pings", [0])) / max(len(latency_results.get("pings", [1])), 1),
+                    "mean": sum(latency_results.get("pings", [0])) / max(len(latency_results.get("pings", [])), 1),
                     "median": sorted(latency_results.get("pings", [0]))[len(latency_results.get("pings", [0])) // 2] if latency_results.get("pings") else 0
                 },
                 "count": len(latency_results.get("pings", [])),
