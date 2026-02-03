@@ -20,7 +20,7 @@ MAX_CONNECTIONS = 32  # Maximum allowed concurrent connections
 MIN_CONNECTIONS = 1   # Minimum allowed concurrent connections
 YIELD_CHECK_INTERVAL = 256 * 1024  # Yield control every 256KB transferred
 MIN_SAMPLE_ELAPSED = 0.05  # Minimum elapsed time (50ms) to avoid division by tiny values
-MAX_REASONABLE_SPEED = 200.0  # Maximum reasonable speed in Mbps to filter spikes
+MAX_REASONABLE_SPEED = 20000.0  # Maximum reasonable speed in Mbps to filter spikes (20 Gbps)
 SPEED_SMOOTHING_FACTOR = 0.3  # Exponential moving average smoothing factor (30% new, 70% old)
 MIN_WORKER_SPEED_SAMPLES = 3  # Minimum samples before using worker speed
 
@@ -83,7 +83,8 @@ class UploadTester:
         
         result = UploadResult()
         
-        bytes_uploaded = 0
+        # Use a list to make bytes_uploaded mutable and shareable across tasks
+        bytes_uploaded = [0]  # Wrap in list for proper sharing between coroutines
         speed_samples = []
         connection_stats = []  # Shared list to collect connection stats
         start_time = time.perf_counter()
@@ -137,6 +138,8 @@ class UploadTester:
                     stats.bytes_transferred += chunk_len
                     conn_bytes_uploaded += chunk_len
                     bytes_since_yield += chunk_len
+                    # Update shared bytes counter for progress tracking
+                    bytes_uploaded[0] += chunk_len
                     
                     # Sample per-connection speed periodically
                     current_time = time.perf_counter()
@@ -210,6 +213,7 @@ class UploadTester:
             last_smoothed_speed = 0.0  # Track smoothed speed for UI display
             speed_mbps = 0.0  # Initialize to prevent UnboundLocalError
             first_sample = True  # Track first sample to avoid initial spikes
+            smoothed_speed = 0.0  # Initialize smoothed_speed
             
             while not stop_flag.is_set() and time.perf_counter() < end_time:
                 try:
@@ -218,7 +222,7 @@ class UploadTester:
                     pass
                 
                 current_time = time.perf_counter()
-                current_bytes = bytes_uploaded
+                current_bytes = bytes_uploaded[0]  # Read from shared list
                 
                 elapsed = current_time - last_time
                 
@@ -239,19 +243,20 @@ class UploadTester:
                 
                 # Calculate smoothed speed using exponential moving average
                 # This reduces oscillations while maintaining responsiveness
-                if last_smoothed_speed == 0.0:
-                    # First valid speed, use directly
-                    smoothed_speed = speed_mbps if speed_mbps < MAX_REASONABLE_SPEED else last_smoothed_speed
-                else:
-                    # Apply exponential smoothing: 30% new, 70% old
-                    smoothed_speed = (SPEED_SMOOTHING_FACTOR * speed_mbps) + ((1.0 - SPEED_SMOOTHING_FACTOR) * last_smoothed_speed)
+                if speed_mbps > 0:  # Only update if we have valid speed
+                    if last_smoothed_speed == 0.0:
+                        # First valid speed, use directly
+                        smoothed_speed = speed_mbps if speed_mbps < MAX_REASONABLE_SPEED else 0.0
+                    else:
+                        # Apply exponential smoothing: 30% new, 70% old
+                        smoothed_speed = (SPEED_SMOOTHING_FACTOR * speed_mbps) + ((1.0 - SPEED_SMOOTHING_FACTOR) * last_smoothed_speed)
+                    
+                    last_smoothed_speed = smoothed_speed
                 
                 # Update UI with smoothed speed for stable display
                 if self.on_progress:
                     prog = (current_time - start_time) / self.duration_seconds
                     self.on_progress(min(prog, 1.0), smoothed_speed)
-                
-                last_smoothed_speed = smoothed_speed
         
         # Create tasks
         worker_tasks = [asyncio.create_task(upload_worker(i)) for i in range(connections)]
@@ -280,7 +285,7 @@ class UploadTester:
         
         # Collect results from shared list
         result.duration_ms = (time.perf_counter() - start_time) * 1000
-        result.bytes_total = bytes_uploaded
+        result.bytes_total = bytes_uploaded[0]  # Read from shared list
         result.connections = connection_stats  # Use shared list populated by workers
         
         # Calculate overall speed from per-connection samples
