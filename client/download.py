@@ -178,6 +178,8 @@ class SimpleDownloadTester:
             nonlocal bytes_downloaded
             last_bytes = 0
             last_time = start_time
+            smoothed_speed = 0.0  # For stable UI display
+            SMOOTHING_FACTOR = 0.3  # 30% new, 70% old for smooth display
             
             while not stop_flag.is_set() and time.perf_counter() < end_time:
                 try:
@@ -195,9 +197,15 @@ class SimpleDownloadTester:
                     speed_mbps = ((current_bytes - last_bytes) * 8) / elapsed / 1_000_000
                     speed_samples.append(speed_mbps)
                     
+                    # Apply exponential smoothing for stable UI display
+                    if smoothed_speed == 0.0:
+                        smoothed_speed = speed_mbps
+                    else:
+                        smoothed_speed = (SMOOTHING_FACTOR * speed_mbps) + ((1.0 - SMOOTHING_FACTOR) * smoothed_speed)
+                    
                     if self.on_progress:
                         prog = (current_time - start_time) / self.duration_seconds
-                        self.on_progress(min(prog, 1.0), speed_mbps)
+                        self.on_progress(min(prog, 1.0), smoothed_speed)
                 
                 last_bytes = current_bytes
                 last_time = current_time
