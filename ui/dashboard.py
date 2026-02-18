@@ -98,11 +98,16 @@ def print_server_selection(servers: list, selected_idx: int = 0) -> None:
 
 def print_latency_details(result) -> None:  # noqa: ANN001 (ServerLatencyResult)
     """Print detailed latency statistics and a histogram."""
+    pings = result.pings
+
+    if not pings:
+        console.print("[dim]No latency samples collected.[/dim]")
+        return
+
     table = Table(title="Latency Details", box=box.ROUNDED)
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")
 
-    pings = result.pings
     table.add_row("Min", format_latency(min(pings)))
     table.add_row("Max", format_latency(max(pings)))
     table.add_row("Mean", format_latency(statistics.mean(pings)))

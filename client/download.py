@@ -8,7 +8,6 @@ and EMA-smoothed progress callback.
 from __future__ import annotations
 
 import asyncio
-import statistics
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
@@ -27,7 +26,7 @@ from .constants import (
     SAMPLE_INTERVAL,
     WARMUP_SECONDS,
 )
-from .stats import ConnectionStats, LatencyStats
+from .stats import ConnectionStats, LatencyStats, calculate_iqm
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +57,7 @@ class DownloadResult:
             self.calculate()
             return
 
-        trimmed = _iqm(self.samples)
+        trimmed = calculate_iqm(self.samples)
         if trimmed > 0:
             self.speed_mbps = trimmed
             self.speed_bps = trimmed * 1_000_000
@@ -75,20 +74,6 @@ class DownloadResult:
         if self.loaded_latency:
             result["loaded_latency"] = self.loaded_latency.to_dict()
         return result
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-def _iqm(samples: List[float]) -> float:
-    if not samples:
-        return 0.0
-    if len(samples) < 4:
-        return statistics.mean(samples)
-    ordered = sorted(samples)
-    n = len(ordered)
-    return statistics.mean(ordered[n // 4 : (3 * n) // 4]) or statistics.mean(samples)
 
 
 # ---------------------------------------------------------------------------

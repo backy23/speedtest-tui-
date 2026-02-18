@@ -190,12 +190,18 @@ class LatencyTester:
             except (websockets.exceptions.WebSocketException, ConnectionError, OSError):
                 break
 
+            # Ensure we're working with a string (websockets can return bytes)
+            if isinstance(msg, bytes):
+                msg = msg.decode("utf-8", errors="replace")
+
             if msg.startswith("HELLO"):
                 parts = msg.split()
                 if len(parts) >= 2:
                     result.server_version = parts[1]
             elif msg.startswith("YOURIP"):
-                result.external_ip = msg.split()[1].strip()
+                parts = msg.split()
+                if len(parts) >= 2:
+                    result.external_ip = parts[1].strip()
 
             received += 1
             if received >= 3:
@@ -209,6 +215,10 @@ class LatencyTester:
         try:
             msg = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
             recv_time = time.perf_counter() * 1000
+
+            # Ensure we're working with a string
+            if isinstance(msg, bytes):
+                msg = msg.decode("utf-8", errors="replace")
 
             if msg.startswith("PONG"):
                 parts = msg.split()
@@ -264,7 +274,9 @@ async def measure_loaded_latency(
             for _ in range(3):
                 try:
                     await asyncio.wait_for(ws.recv(), timeout=_MSG_TIMEOUT)
-                except (asyncio.TimeoutError, Exception):
+                except asyncio.TimeoutError:
+                    break
+                except (websockets.exceptions.WebSocketException, ConnectionError, OSError):
                     break
 
             while not stop.is_set():
@@ -273,6 +285,10 @@ async def measure_loaded_latency(
                     await ws.send(f"PING {send_time}")
                     msg = await asyncio.wait_for(ws.recv(), timeout=_PING_TIMEOUT)
                     recv_time = time.perf_counter() * 1000
+
+                    # Ensure we're working with a string
+                    if isinstance(msg, bytes):
+                        msg = msg.decode("utf-8", errors="replace")
 
                     if msg.startswith("PONG"):
                         samples.append(recv_time - send_time)
