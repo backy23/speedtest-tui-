@@ -36,12 +36,13 @@ def save_result(result: Dict[str, Any]) -> str:
     path = _history_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # Ensure a timestamp exists
-    if "timestamp" not in result:
-        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    # Work on a shallow copy so we don't mutate the caller's dict
+    entry = dict(result)
+    if "timestamp" not in entry:
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(result, ensure_ascii=False) + "\n")
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     return path
 

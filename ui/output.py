@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +26,7 @@ def create_result_json(
         s = sorted(pings)
         rtt_min, rtt_max = s[0], s[-1]
         rtt_mean = sum(pings) / n
-        rtt_median = s[n // 2]
+        rtt_median = statistics.median(pings)
     else:
         rtt_min = rtt_max = rtt_mean = rtt_median = 0
 
@@ -126,6 +127,13 @@ def format_csv_header() -> str:
     return "timestamp,server,isp,ip,ping_ms,jitter_ms,download_mbps,upload_mbps"
 
 
+def _csv_escape(value: str) -> str:
+    """Quote a CSV field if it contains commas, quotes, or newlines."""
+    if any(c in value for c in (",", '"', "\n", "\r")):
+        return '"' + value.replace('"', '""') + '"'
+    return value
+
+
 def format_csv_row(
     server_name: str,
     isp: str,
@@ -136,4 +144,7 @@ def format_csv_row(
     upload_mbps: float,
 ) -> str:
     ts = datetime.now(timezone.utc).isoformat()
-    return f"{ts},{server_name},{isp},{ip},{ping_ms:.1f},{jitter_ms:.2f},{download_mbps:.2f},{upload_mbps:.2f}"
+    srv = _csv_escape(server_name)
+    isp_safe = _csv_escape(isp)
+    ip_safe = _csv_escape(ip)
+    return f"{ts},{srv},{isp_safe},{ip_safe},{ping_ms:.1f},{jitter_ms:.2f},{download_mbps:.2f},{upload_mbps:.2f}"
