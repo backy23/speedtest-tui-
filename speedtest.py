@@ -4,12 +4,16 @@ Speedtest CLI -- advanced network speed testing from the terminal.
 
 Usage::
 
-    python speedtest.py              # rich dashboard
-    python speedtest.py --simple     # plain text
-    python speedtest.py --json       # JSON to stdout
-    python speedtest.py -o result.json  # save to file
-    python speedtest.py --history    # show past results
-    python speedtest.py --csv log.csv   # append CSV row
+    python speedtest.py                     # rich dashboard
+    python speedtest.py --simple            # plain text
+    python speedtest.py --json              # JSON to stdout
+    python speedtest.py -o result.json      # save to file
+    python speedtest.py --history           # show past results
+    python speedtest.py --csv log.csv       # append CSV row
+    python speedtest.py --repeat 5 --interval 60  # repeat 5 times
+    python speedtest.py --plan 100          # grade vs plan speed
+    python speedtest.py --share             # print shareable text
+    python speedtest.py --alert-below 50    # warn if download < 50 Mbps
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from typing import Optional
 
 from client.api import SpeedtestAPI
@@ -32,6 +37,12 @@ from client.constants import (
     MIN_PING_COUNT,
 )
 from client.download import DownloadTester
+from client.grading import (
+    compare_with_previous,
+    format_delta,
+    format_share_text,
+    grade_speed,
+)
 from client.history import load_history, save_result
 from client.latency import LatencyTester
 from client.upload import UploadTester
@@ -85,6 +96,9 @@ async def run_speedtest(
     download_duration: float = DEFAULT_DURATION,
     upload_duration: float = DEFAULT_DURATION,
     connections: int = DEFAULT_CONNECTIONS,
+    plan_mbps: float = 0.0,
+    share: bool = False,
+    alert_below: float = 0.0,
 ) -> Optional[dict]:
     """Execute the full speedtest sequence and return a JSON-serialisable dict."""
 
@@ -242,7 +256,63 @@ async def run_speedtest(
             if not json_output:
                 console.print(f"[green]CSV row appended to:[/green] {csv_file}")
 
-        # -- History --------------------------------------------------------
+        # -- Compare with previous ------------------------------------------
+        if show_ui:
+            previous = load_history(limit=1)
+            delta = compare_with_previous(result_json, previous)
+            if delta:
+                console.print(
+                    f"  vs last: "
+                    f"Ping {format_delta(delta['ping_delta'], 'ms', invert=True)}  "
+                    f"DL {format_delta(delta['download_delta'], 'Mbps')}  "
+                    f"UL {format_delta(delta['upload_delta'], 'Mbps')}"
+                )
+
+        # -- Speed grade ----------------------------------------------------
+        if plan_mbps > 0:
+            dl_grade, dl_color, dl_pct = grade_speed(dl_result.speed_mbps, plan_mbps)
+            ul_grade, ul_color, ul_pct = grade_speed(ul_result.speed_mbps, plan_mbps)
+            if show_ui:
+                console.print(
+                    f"\n  [bold]Plan: {plan_mbps:.0f} Mbps[/bold]\n"
+                    f"  Download: [{dl_color}]{dl_grade}[/{dl_color}] "
+                    f"({dl_pct:.0%} of plan)\n"
+                    f"  Upload:   [{ul_color}]{ul_grade}[/{ul_color}] "
+                    f"({ul_pct:.0%} of plan)"
+                )
+            elif simple:
+                print(f"Grade (Download): {dl_grade} ({dl_pct:.0%} of {plan_mbps:.0f} Mbps plan)")
+                print(f"Grade (Upload): {ul_grade} ({ul_pct:.0%} of {plan_mbps:.0f} Mbps plan)")
+
+        # -- Share ----------------------------------------------------------
+        if share:
+            share_text = format_share_text(
+                ping_ms=best.latency_ms,
+                jitter_ms=best.jitter_ms,
+                download_mbps=dl_result.speed_mbps,
+                upload_mbps=ul_result.speed_mbps,
+                server_name=best_server.name,
+                server_sponsor=best_server.sponsor,
+                packet_loss=best.packet_loss,
+            )
+            if show_ui:
+                from rich.panel import Panel
+                console.print(Panel(share_text, title="Share This Result", border_style="cyan"))
+            else:
+                print("\n" + share_text)
+
+        # -- Alert ----------------------------------------------------------
+        if alert_below > 0 and dl_result.speed_mbps < alert_below:
+            msg = (
+                f"ALERT: Download speed {dl_result.speed_mbps:.2f} Mbps "
+                f"is below threshold {alert_below:.0f} Mbps"
+            )
+            if show_ui:
+                console.print(f"\n[bold red]{msg}[/bold red]")
+            else:
+                print(msg, file=sys.stderr)
+
+        # -- History (save after comparison) --------------------------------
         save_result(result_json)
 
         return result_json
@@ -276,16 +346,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Speedtest CLI -- Advanced network speed testing",
     )
+    # Output modes
     parser.add_argument("--json", "-j", action="store_true", help="Output results as JSON")
     parser.add_argument("--output", "-o", type=str, metavar="FILE", help="Save results to JSON file")
     parser.add_argument("--csv", type=str, metavar="FILE", help="Append results as CSV row")
     parser.add_argument("--simple", "-s", action="store_true", help="Simple output mode (no dashboard)")
+    parser.add_argument("--share", action="store_true", help="Print shareable result text")
+
+    # Server selection
     parser.add_argument("--server", type=int, metavar="ID", help="Use specific server by ID")
+    parser.add_argument("--list-servers", action="store_true", help="List available servers and exit")
+
+    # Test parameters
     parser.add_argument("--ping-count", type=int, default=DEFAULT_PING_COUNT, metavar="N", help="Number of ping samples (default: 10)")
     parser.add_argument("--download-duration", type=float, default=DEFAULT_DURATION, metavar="SECS", help="Download test duration in seconds (default: 10)")
     parser.add_argument("--upload-duration", type=float, default=DEFAULT_DURATION, metavar="SECS", help="Upload test duration in seconds (default: 10)")
     parser.add_argument("--connections", type=int, default=DEFAULT_CONNECTIONS, metavar="N", help="Number of concurrent connections (default: 4)")
-    parser.add_argument("--list-servers", action="store_true", help="List available servers and exit")
+
+    # Repeat mode
+    parser.add_argument("--repeat", type=int, default=1, metavar="N", help="Run the test N times (default: 1)")
+    parser.add_argument("--interval", type=float, default=60.0, metavar="SECS", help="Seconds between repeated tests (default: 60)")
+
+    # Grading and alerting
+    parser.add_argument("--plan", type=float, default=0.0, metavar="MBPS", help="Your plan speed in Mbps for grading")
+    parser.add_argument("--alert-below", type=float, default=0.0, metavar="MBPS", help="Alert if download speed drops below this threshold")
+
+    # History
     parser.add_argument("--history", action="store_true", help="Show past test results and exit")
 
     args = parser.parse_args()
@@ -308,6 +394,10 @@ def main() -> None:
         console.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
 
+    if args.repeat < 1:
+        console.print("[red]Error: --repeat must be >= 1[/red]")
+        sys.exit(1)
+
     # List-servers mode
     if args.list_servers:
         async def _list() -> None:
@@ -321,21 +411,35 @@ def main() -> None:
         asyncio.run(_list())
         return
 
-    # Normal run
+    # Normal run (with repeat support)
     try:
-        asyncio.run(
-            run_speedtest(
-                json_output=args.json,
-                output_file=args.output,
-                csv_file=args.csv,
-                simple=args.simple,
-                server_id=args.server,
-                ping_count=args.ping_count,
-                download_duration=args.download_duration,
-                upload_duration=args.upload_duration,
-                connections=args.connections,
+        for run_idx in range(args.repeat):
+            if args.repeat > 1:
+                console.print(f"\n[bold cyan]--- Run {run_idx + 1}/{args.repeat} ---[/bold cyan]")
+
+            asyncio.run(
+                run_speedtest(
+                    json_output=args.json,
+                    output_file=args.output,
+                    csv_file=args.csv,
+                    simple=args.simple,
+                    server_id=args.server,
+                    ping_count=args.ping_count,
+                    download_duration=args.download_duration,
+                    upload_duration=args.upload_duration,
+                    connections=args.connections,
+                    plan_mbps=args.plan,
+                    share=args.share,
+                    alert_below=args.alert_below,
+                )
             )
-        )
+
+            # Wait between runs (but not after the last one)
+            if run_idx < args.repeat - 1:
+                if not args.json:
+                    console.print(f"[dim]Next run in {args.interval:.0f}s...[/dim]")
+                time.sleep(args.interval)
+
     except KeyboardInterrupt:
         console.print("\n[yellow]Test cancelled by user[/yellow]")
         sys.exit(1)

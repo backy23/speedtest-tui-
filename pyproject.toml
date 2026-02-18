@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speedtest-tui"
+version = "1.0.0"
+description = "Advanced network speed testing CLI with rich terminal dashboard"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "websockets>=12.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+speedtest-tui = "speedtest:main"
+
+[project.urls]
+Homepage = "https://github.com/backy23/speedtest-tui"
+Repository = "https://github.com/backy23/speedtest-tui"
+
+[tool.setuptools.packages.find]
+include = ["client*", "ui*"]
