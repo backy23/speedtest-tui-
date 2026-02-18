@@ -17,12 +17,15 @@ A Python-based command-line interface for testing internet speed using Ookla's S
 - **Parallel Testing**: Uses multiple concurrent connections with warm-up discard and IQM-based speed calculation for stable results.
 - **Rich Interface**: Beautiful terminal dashboard using the `rich` library.
 - **Test History**: Automatically saves results with sparkline trend charts (`--history`).
+- **Time-of-Day Analysis**: See average speed by hour to detect peak-hour throttling (`--history --hourly`).
 - **Compare with Previous**: Shows delta vs your last test after every run.
 - **Speed Grading**: Grade your speed against your ISP plan (`--plan 100`).
+- **Config File**: Save preferred server, plan speed, and defaults (`--config`, `--set`).
 - **Repeat Mode**: Run tests on a schedule (`--repeat 5 --interval 60`).
 - **Alert Threshold**: Get warned when speed drops below a threshold (`--alert-below 50`).
 - **Share Results**: Generate a shareable text block (`--share`).
 - **JSON / CSV Export**: Full data export for automation and long-term monitoring.
+- **CI**: GitHub Actions runs 125+ tests on Python 3.9-3.12 on every push.
 - **pip Installable**: Install globally with `pip install .`
 
 ## Installation
@@ -78,6 +81,9 @@ python speedtest.py
 | `--interval SECS` | Seconds between repeated tests (default: 60) |
 | `--plan MBPS` | Your plan speed for grading (shows A+/A/B/C/D/F) |
 | `--alert-below MBPS` | Alert if download drops below threshold |
+| `--hourly` | Show speed by time of day (use with --history) |
+| `--config` | Show current config and exit |
+| `--set KEY VALUE` | Set a config value (e.g., `--set plan 100`) |
 
 ### Examples
 
@@ -102,6 +108,14 @@ python speedtest.py --share
 
 # Use a specific server with more pings
 python speedtest.py --server 12345 --ping-count 20
+
+# Save your preferences
+python speedtest.py --set plan 100
+python speedtest.py --set server 12345
+python speedtest.py --config  # view saved settings
+
+# See speed by time of day
+python speedtest.py --history --hourly
 ```
 
 ## Running Tests

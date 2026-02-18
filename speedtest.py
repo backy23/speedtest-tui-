@@ -368,18 +368,70 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=60.0, metavar="SECS", help="Seconds between repeated tests (default: 60)")
 
     # Grading and alerting
-    parser.add_argument("--plan", type=float, default=0.0, metavar="MBPS", help="Your plan speed in Mbps for grading")
-    parser.add_argument("--alert-below", type=float, default=0.0, metavar="MBPS", help="Alert if download speed drops below this threshold")
+    parser.add_argument("--plan", type=float, default=None, metavar="MBPS", help="Your plan speed in Mbps for grading")
+    parser.add_argument("--alert-below", type=float, default=None, metavar="MBPS", help="Alert if download speed drops below this threshold")
 
     # History
     parser.add_argument("--history", action="store_true", help="Show past test results and exit")
+    parser.add_argument("--hourly", action="store_true", help="Show speed by time of day (use with --history)")
+
+    # Config
+    parser.add_argument("--config", action="store_true", help="Show current config and exit")
+    parser.add_argument("--set", nargs=2, metavar=("KEY", "VALUE"), help="Set a config value (e.g., --set plan 100)")
 
     args = parser.parse_args()
 
+    # Config mode
+    from client.config import load_config, set_config_value, config_path
+
+    if args.config:
+        cfg = load_config()
+        console.print(f"\n[bold]Config file:[/bold] {config_path()}\n")
+        for k, v in sorted(cfg.items()):
+            console.print(f"  {k}: [bold]{v}[/bold]")
+        return
+
+    if args.set:
+        key, raw_value = args.set
+        # Auto-convert numeric values
+        try:
+            value = int(raw_value)
+        except ValueError:
+            try:
+                value = float(raw_value)
+            except ValueError:
+                value = raw_value
+        path = set_config_value(key, value)
+        console.print(f"[green]Set {key} = {value}[/green] (saved to {path})")
+        return
+
+    # Merge config defaults with CLI args
+    cfg = load_config()
+
+    def _resolve(cli_val, cfg_key, default):
+        """CLI flag wins, then config, then hardcoded default."""
+        if cli_val is not None:
+            return cli_val
+        cfg_val = cfg.get(cfg_key)
+        if cfg_val is not None and cfg_val != "" and cfg_val != 0:
+            return type(default)(cfg_val) if not isinstance(cfg_val, type(default)) else cfg_val
+        return default
+
+    plan_mbps = _resolve(args.plan, "plan", 0.0)
+    alert_below = _resolve(args.alert_below, "alert_below", 0.0)
+    csv_file = args.csv or cfg.get("csv_file", "") or None
+    server_id = args.server or cfg.get("server") or None
+
     # History mode
     if args.history:
-        entries = load_history()
+        entries = load_history(limit=50)
         print_history(entries)
+        if args.hourly:
+            from client.history import group_by_hour, format_hourly_summary
+            from ui.dashboard import print_hourly_analysis
+            buckets = group_by_hour(entries)
+            rows = format_hourly_summary(buckets)
+            print_hourly_analysis(rows)
         return
 
     # Validate
@@ -421,16 +473,16 @@ def main() -> None:
                 run_speedtest(
                     json_output=args.json,
                     output_file=args.output,
-                    csv_file=args.csv,
+                    csv_file=csv_file,
                     simple=args.simple,
-                    server_id=args.server,
+                    server_id=server_id,
                     ping_count=args.ping_count,
                     download_duration=args.download_duration,
                     upload_duration=args.upload_duration,
                     connections=args.connections,
-                    plan_mbps=args.plan,
+                    plan_mbps=plan_mbps,
                     share=args.share,
-                    alert_below=args.alert_below,
+                    alert_below=alert_below,
                 )
             )
 

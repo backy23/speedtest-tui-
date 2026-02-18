@@ -117,3 +117,62 @@ def sparkline(values: List[float]) -> str:
         bars[min(int((v - lo) / span * (len(bars) - 1)), len(bars) - 1)]
         for v in values
     )
+
+
+# ---------------------------------------------------------------------------
+# Time-of-day analysis
+# ---------------------------------------------------------------------------
+
+def group_by_hour(entries: List[Dict[str, Any]]) -> Dict[int, Dict[str, List[float]]]:
+    """
+    Group history entries by hour-of-day (0-23).
+
+    Returns ``{hour: {"download": [...], "upload": [...], "ping": [...]}}``.
+    """
+    from datetime import datetime
+
+    buckets: Dict[int, Dict[str, List[float]]] = {}
+
+    for e in entries:
+        ts_raw = e.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(ts_raw)
+            hour = dt.hour
+        except (ValueError, TypeError):
+            continue
+
+        if hour not in buckets:
+            buckets[hour] = {"download": [], "upload": [], "ping": []}
+
+        dl = e.get("download", {})
+        ul = e.get("upload", {})
+
+        dl_val = dl.get("speed_mbps", 0) if isinstance(dl, dict) else 0
+        ul_val = ul.get("speed_mbps", 0) if isinstance(ul, dict) else 0
+        ping_val = e.get("ping", 0)
+
+        if dl_val > 0:
+            buckets[hour]["download"].append(dl_val)
+        if ul_val > 0:
+            buckets[hour]["upload"].append(ul_val)
+        if ping_val > 0:
+            buckets[hour]["ping"].append(ping_val)
+
+    return buckets
+
+
+def format_hourly_summary(buckets: Dict[int, Dict[str, List[float]]]) -> List[Dict[str, Any]]:
+    """Format hourly buckets into rows with averages."""
+    import statistics
+
+    rows = []
+    for hour in sorted(buckets.keys()):
+        data = buckets[hour]
+        rows.append({
+            "hour": f"{hour:02d}:00",
+            "tests": max(len(data["download"]), len(data["upload"]), len(data["ping"])),
+            "avg_download": statistics.mean(data["download"]) if data["download"] else 0,
+            "avg_upload": statistics.mean(data["upload"]) if data["upload"] else 0,
+            "avg_ping": statistics.mean(data["ping"]) if data["ping"] else 0,
+        })
+    return rows

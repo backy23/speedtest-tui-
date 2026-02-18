@@ -244,6 +244,31 @@ def print_history(entries: List[dict]) -> None:
                        f"[dim]{min(ping_values):.0f}-{max(ping_values):.0f} ms[/dim]")
 
 
+def print_hourly_analysis(rows: list) -> None:
+    """Print time-of-day analysis table."""
+    if not rows:
+        console.print("[dim]Not enough history data for hourly analysis.[/dim]")
+        return
+
+    table = Table(title="Speed by Time of Day", box=box.ROUNDED)
+    table.add_column("Hour", style="bold")
+    table.add_column("Tests", justify="right", style="dim")
+    table.add_column("Avg Download", justify="right")
+    table.add_column("Avg Upload", justify="right")
+    table.add_column("Avg Ping", justify="right")
+
+    for r in rows:
+        table.add_row(
+            r["hour"],
+            str(r["tests"]),
+            format_speed(r["avg_download"]) if r["avg_download"] > 0 else "-",
+            format_speed(r["avg_upload"]) if r["avg_upload"] > 0 else "-",
+            f"{r['avg_ping']:.1f} ms" if r["avg_ping"] > 0 else "-",
+        )
+
+    console.print(table)
+
+
 # ---------------------------------------------------------------------------
 # Progress display
 # ---------------------------------------------------------------------------
